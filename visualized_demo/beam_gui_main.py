@@ -37,8 +37,27 @@ from input_handler import InputHandler
 from visualization_manager import VisualizationManager
 from animation_engine import AnimationEngine
 from simulation_controller import SimulationController
-from variant_beam_model import create_timoshenko_hypergraph
-from plothg import PlotSettings
+from beam_model_def import create_beam_model
+import edge_grouper
+from trivial_trimmer import trim_trivial_edges
+
+
+NODE_LABEL_ALIASES = {
+    'P': 'point load',
+    'k': 'kappa',
+    'E': 'youngs modulus',
+    'I': 'moment of inertia',
+    'G': 'shear modulus',
+    'A': 'area',
+    'L': 'length',
+    'w': 'theta',
+    'radius': 'radius',
+    'V': 'poisson',
+    'S': 'slenderness ratio',
+    'heuristic': 'slenderness heuristic',
+}
+
+TRIM_SKIP_GROUPS = ('other',)
 
 
 class TimoshenkoBeamGUI:
@@ -83,7 +102,18 @@ class TimoshenkoBeamGUI:
         self.root.configure(bg=DEFAULT_BG_COLOR)
         
         # Create hypergraph model
-        self.hypergraph = create_timoshenko_hypergraph()
+        self.base_hypergraph, self.nodes = create_beam_model()
+        (
+            self.node_alias_map,
+            self.node_display_lookup,
+            self.node_label_to_alias,
+        ) = self._build_alias_maps(self.nodes)
+        self.hypergraph = self.base_hypergraph
+        self.current_sim_hypergraph = self.base_hypergraph
+        self.current_trim_notes: List[str] = []
+        self.function_group_labels: Dict[str, str] = self._build_group_label_map(
+            edge_grouper.group_edges_by_label(self.base_hypergraph)
+        )
         
         # Initialize components
         self.layout_manager = LayoutManager(self.root)
@@ -107,19 +137,65 @@ class TimoshenkoBeamGUI:
         Initialize all component managers.
         """
         # Create input handler
-        self.input_handler = InputHandler(self.control_frame, self, self.hypergraph)
+        self.input_handler = InputHandler(
+            self.control_frame,
+            self,
+            self.hypergraph,
+            node_aliases=self.node_alias_map,
+        )
         
         # Create visualization components
         self.fig, self.ax, self.canvas = self.layout_manager.create_visualization_panel(self.viz_frame)
         self.visualization_manager = VisualizationManager(self.fig, self.ax, self.canvas)
         # Use bipartite representation in the GUI
         self.visualization_manager.use_bipartite = True
+        self.visualization_manager.set_alias_map(self.node_label_to_alias)
+        self.visualization_manager.set_function_group_labels(self.function_group_labels)
         
         # Create animation engine
         self.animation_engine = AnimationEngine(self.fig, self.ax, self.canvas)
         
         # Create simulation controller
         self.simulation_controller = SimulationController(self, self.hypergraph)
+    
+    def _build_alias_maps(
+        self, nodes: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[Any, str], Dict[str, str]]:
+        """
+        Construct alias mappings without mutating the underlying hypergraph nodes.
+        
+        Args:
+            nodes: Dictionary of nodes returned by the beam model definition
+        
+        Returns:
+            Tuple containing:
+                - alias_to_node: Mapping of display labels to Node objects
+                - node_to_alias: Mapping of Node objects to display labels
+                - canonical_to_alias: Mapping of canonical node labels to display labels
+        """
+        alias_to_node: Dict[str, Any] = {}
+        node_to_alias: Dict[Any, str] = {}
+        canonical_to_alias: Dict[str, str] = {}
+        
+        for key, node in nodes.items():
+            canonical_label = getattr(node, 'label', str(node))
+            display_label = NODE_LABEL_ALIASES.get(key, canonical_label)
+            
+            alias_to_node[display_label] = node
+            node_to_alias[node] = display_label
+            node_to_alias[id(node)] = display_label
+            canonical_to_alias[canonical_label] = display_label
+        
+        # Ensure every node in the hypergraph has an alias entry
+        for node in self.base_hypergraph.nodes:
+            canonical_label = getattr(node, 'label', str(node))
+            if canonical_label not in canonical_to_alias:
+                canonical_to_alias[canonical_label] = canonical_label
+                node_to_alias[node] = canonical_label
+                node_to_alias[id(node)] = canonical_label
+                alias_to_node.setdefault(canonical_label, node)
+        
+        return alias_to_node, node_to_alias, canonical_to_alias
     
     def _create_gui_elements(self) -> None:
         """
@@ -228,6 +304,8 @@ class TimoshenkoBeamGUI:
         """
         Set up the initial view of the hypergraph.
         """
+        self.visualization_manager.set_alias_map(self.node_label_to_alias)
+        self.visualization_manager.set_function_group_labels(self.function_group_labels)
         # Set up initial visualization
         self.visualization_manager.setup_initial_view(
             self.hypergraph,
@@ -247,6 +325,14 @@ class TimoshenkoBeamGUI:
         if not is_valid:
             self.status_label.config(text=f"Error: {error_message}")
             return
+        
+        # Prepare simulation hypergraph using edge grouping and trimming
+        simulation_hypergraph, removed_edges = self._prepare_simulation_hypergraph(inputs)
+        self.current_sim_hypergraph = simulation_hypergraph
+        self.simulation_controller.hypergraph = simulation_hypergraph
+        
+        if removed_edges:
+            self.status_label.config(text=f"Pruned {removed_edges} redundant edges; running simulation...")
         
         # Execute hypergraph simulation and handle results via callback function
         self.simulation_controller.run_simulation(
@@ -269,7 +355,13 @@ class TimoshenkoBeamGUI:
             self.computed_results = computed_results
             
             # Create animation
-            self._create_animation(tnodes, inputs, target_node, computed_results)
+            self._create_animation(
+                tnodes,
+                inputs,
+                target_node,
+                computed_results,
+                hypergraph=self.current_sim_hypergraph
+            )
             
             # Update status
             self.status_label.config(text="Animation complete!")
@@ -280,7 +372,8 @@ class TimoshenkoBeamGUI:
             self.run_button.config(state="normal")
     
     def _create_animation(self, tnodes: List[Any], inputs: Dict[Any, float], 
-                         target_node: Any, computed_results: Optional[Dict[str, float]] = None) -> None:
+                         target_node: Any, computed_results: Optional[Dict[str, float]] = None,
+                         *, hypergraph: Optional[Any] = None) -> None:
         """
         Create the animation for the simulation results.
         
@@ -289,7 +382,10 @@ class TimoshenkoBeamGUI:
             inputs: Dictionary of input values
             target_node: Target node object
             computed_results: Optional dictionary of computed results
+            hypergraph: Optional hypergraph to use for visualization
         """
+        active_hypergraph = hypergraph or self.current_sim_hypergraph or self.hypergraph
+        
         # Validate inputs
         if not tnodes:
             raise ValueError("No solution nodes provided for animation")
@@ -299,8 +395,10 @@ class TimoshenkoBeamGUI:
             raise ValueError("No target node provided for animation")
         
         # Prepare visualization for animation by setting all nodes to neutral gray color
+        self.visualization_manager.set_alias_map(self.node_label_to_alias)
+        self.visualization_manager.set_function_group_labels(self.function_group_labels)
         self.visualization_manager.setup_animation_view(
-            self.hypergraph,
+            active_hypergraph,
             self.input_handler.get_node_vars(),
             self.input_handler.get_toggle_switches()
         )
@@ -314,9 +412,14 @@ class TimoshenkoBeamGUI:
         bps.animation['circle_radius'] = 0.08
         bps.animation['circle_color'] = '#ff3333'
         bps.animation['circle_alpha'] = 0.9
-        # Inject user-provided semantic grouping for visualization-only merges
+        semantic_map: Dict[str, str] = {}
         if isinstance(SEMANTIC_GROUPS, dict) and SEMANTIC_GROUPS:
-            bps.merge['semantic_groups'] = SEMANTIC_GROUPS
+            semantic_map.update(SEMANTIC_GROUPS)
+        if self.function_group_labels:
+            semantic_map.update(self.function_group_labels)
+        if semantic_map:
+            bps.merge['semantic_groups'] = semantic_map
+        bps.merge['read_edge_attr'] = True
 
         # Add status display widget to show animation progress and current operation
         text_box = self.ax.text(0.02, 0.98, '', transform=self.ax.transAxes,
@@ -324,12 +427,14 @@ class TimoshenkoBeamGUI:
                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
         # Generate bipartite animation using current visualization elements
-        input_labels = [str(node) for node in inputs.keys()]
+        input_labels = [self._get_canonical_label(node) for node in inputs.keys()]
+        target_label = self._get_canonical_label(target_node)
+        bps.alias_map = dict(self.node_label_to_alias)
         ani = create_bipartite_animation(
-            self.hypergraph,
+            active_hypergraph,
             tnodes,
             input_labels,
-            str(target_node) if not hasattr(target_node, 'label') else target_node.label,
+            target_label,
             self.visualization_manager.get_circles(),
             self.visualization_manager.get_lines(),
             self.visualization_manager.get_layout_positions(),
@@ -400,6 +505,11 @@ class TimoshenkoBeamGUI:
         # Reset to initial view
         self._setup_initial_view()
         self.status_label.config(text="Reset complete")
+        self.current_sim_hypergraph = self.base_hypergraph
+        self.function_group_labels = self._build_group_label_map(
+            edge_grouper.group_edges_by_label(self.base_hypergraph)
+        )
+        self.visualization_manager.set_function_group_labels(self.function_group_labels)
     
     def update_node_colors(self) -> None:
         """
@@ -421,6 +531,101 @@ class TimoshenkoBeamGUI:
             self.input_handler.get_node_vars(),
             self.input_handler.get_toggle_switches()
         )
+
+    def _prepare_simulation_hypergraph(self, inputs: Dict[Any, float]) -> Tuple[Any, int]:
+        """
+        Prepare a simulation-ready hypergraph by grouping edges and trimming trivial ones.
+        
+        Args:
+            inputs: Dictionary of source node inputs selected by the user
+        
+        Returns:
+            Tuple[Any, int]: The hypergraph to use for simulation and the count of trimmed edges
+        """
+        if not inputs:
+            return self.base_hypergraph, 0
+        
+        base_group_map: Dict[str, List[edge_grouper.Edge]] = {}
+        try:
+            edge_groups = edge_grouper.group_edges_by_label(self.base_hypergraph)
+            base_group_map = edge_groups
+            trim_outcome = trim_trivial_edges(
+                self.base_hypergraph,
+                edge_groups,
+                inputs=inputs,
+                skip_groups=TRIM_SKIP_GROUPS,
+                log=self._log_trim_message,
+            )
+            trimmed_hg = trim_outcome.hypergraph or self.base_hypergraph
+            self.current_trim_notes = list(trim_outcome.notes)
+            self.function_group_labels = self._build_group_label_map(
+                edge_grouper.group_edges_by_label(trimmed_hg)
+            )
+            self.visualization_manager.set_function_group_labels(self.function_group_labels)
+            return trimmed_hg, trim_outcome.removed_count
+        except Exception as exc:
+            self._log_trim_message(f"Trimming disabled due to error: {exc}")
+            self.current_trim_notes = []
+            if base_group_map:
+                self.function_group_labels = self._build_group_label_map(base_group_map)
+            else:
+                self.function_group_labels = {}
+            self.visualization_manager.set_function_group_labels(self.function_group_labels)
+            return self.base_hypergraph, 0
+
+    def _log_trim_message(self, message: str) -> None:
+        """
+        Simple logger hook for edge trimming operations.
+        
+        Args:
+            message: Message emitted by the trimmer
+        """
+        print(f"[Trimmer] {message}")
+
+    def _build_group_label_map(self, grouped_edges: Dict[str, List[edge_grouper.Edge]]) -> Dict[str, str]:
+        """
+        Convert grouped edge data into a mapping of edge label -> friendly group name.
+        """
+        label_map: Dict[str, str] = {}
+        for group_name, edges in grouped_edges.items():
+            if not edges:
+                continue
+            friendly = self._format_group_name(group_name)
+            for edge in edges:
+                if edge.label:
+                    label_map[edge.label] = friendly
+        return label_map
+
+    @staticmethod
+    def _format_group_name(raw_name: str) -> str:
+        """
+        Format a raw group identifier into a user-friendly name.
+        """
+        cleaned = raw_name.replace('_', ' ').strip()
+        if not cleaned:
+            return "Function"
+        return cleaned.title()
+
+    def _get_display_label(self, node: Any) -> str:
+        """
+        Retrieve the display label for a given node if available.
+        """
+        if node is None:
+            return ""
+        return (
+            self.node_display_lookup.get(node)
+            or self.node_display_lookup.get(id(node))
+            or getattr(node, 'label', str(node))
+        )
+
+    @staticmethod
+    def _get_canonical_label(node: Any) -> str:
+        """
+        Retrieve the canonical label for a node (used internally by the solver/visualizer).
+        """
+        if node is None:
+            return ""
+        return getattr(node, 'label', str(node))
 
 
 def main() -> None:

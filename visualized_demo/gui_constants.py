@@ -110,7 +110,9 @@ DEFAULT_TOGGLE_STATES = {
     "kappa": "source",
     "radius": "none",              # Don't provide radius to avoid R→I and R→A calculations
     "poisson": "source",
-    "theta": "target"              # Target variable: beam deflection angle
+    "theta": "target",             # Target variable: beam deflection angle
+    "slenderness ratio": "none",
+    "slenderness heuristic": "none",
 }
 
 # ============================================================================
@@ -206,8 +208,8 @@ DEMO3_CONFIG = {
 # ============================================================================
 
 # Logical grouping of nodes for better UI organization
-MECHANICAL_PROPERTIES = ["youngs modulus", "shear modulus", "poisson", "kappa"]
-GEOMETRY_PROPERTIES = ["length", "area", "moment of inertia", "radius"]
+MECHANICAL_PROPERTIES = ["youngs modulus", "shear modulus", "poisson", "kappa", "slenderness heuristic"]
+GEOMETRY_PROPERTIES = ["length", "area", "moment of inertia", "radius", "slenderness ratio"]
 LOADING_OUTPUT_PROPERTIES = ["point load", "theta"]
 
 # ============================================================================

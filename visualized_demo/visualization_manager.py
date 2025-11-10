@@ -81,6 +81,9 @@ class VisualizationManager:
         self.circles: Dict[str, plt.Circle] = {}
         self.lines: Dict[str, plt.Line2D] = {}
         self.hypergraph: Optional[Any] = None
+        self.alias_map: Dict[str, str] = {}
+        self.inverse_alias_map: Dict[str, str] = {}
+        self.function_group_labels: Dict[str, str] = {}
         # Representation mode
         self.use_bipartite: bool = False
         
@@ -104,6 +107,23 @@ class VisualizationManager:
         # Add subtle grid
         self.ax.grid(True, alpha=0.1, linestyle='-', linewidth=0.5)
     
+    def set_alias_map(self, alias_map: Dict[str, str]) -> None:
+        """
+        Provide a mapping from canonical node labels to display aliases.
+        """
+        self.alias_map = dict(alias_map) if alias_map else {}
+        self.inverse_alias_map = {}
+        if self.alias_map:
+            for canonical, alias in self.alias_map.items():
+                self.inverse_alias_map.setdefault(alias, canonical)
+                self.inverse_alias_map.setdefault(canonical, canonical)
+    
+    def set_function_group_labels(self, group_labels: Dict[str, str]) -> None:
+        """
+        Provide a mapping of edge labels to function group display names.
+        """
+        self.function_group_labels = dict(group_labels) if group_labels else {}
+    
     def setup_initial_view(self, hypergraph: Any, node_vars: Dict[str, Any], 
                           toggle_switches: Dict[str, Any]) -> None:
         """
@@ -123,6 +143,11 @@ class VisualizationManager:
         if self.use_bipartite:
             from plothg_bipartite import plot_bipartite_hypergraph, BipartitePlotSettings
             ps = BipartitePlotSettings()
+            if self.alias_map:
+                ps.alias_map = dict(self.alias_map)
+            if self.function_group_labels:
+                ps.merge['semantic_groups'] = dict(self.function_group_labels)
+            ps.merge['read_edge_attr'] = True
             shapes, lines, positions = plot_bipartite_hypergraph(self.hypergraph, self.ax, ps)
             self.circles = shapes
             self.lines = lines
@@ -159,6 +184,11 @@ class VisualizationManager:
         if self.use_bipartite:
             from plothg_bipartite import plot_bipartite_hypergraph, BipartitePlotSettings
             ps = BipartitePlotSettings()
+            if self.alias_map:
+                ps.alias_map = dict(self.alias_map)
+            if self.function_group_labels:
+                ps.merge['semantic_groups'] = dict(self.function_group_labels)
+            ps.merge['read_edge_attr'] = True
             shapes, lines, positions = plot_bipartite_hypergraph(self.hypergraph, self.ax, ps)
             self.circles = shapes
             self.lines = lines
@@ -204,8 +234,13 @@ class VisualizationManager:
         
         # Add edges
         for edge in self.hypergraph.edges.values():
-            source_labels = [sn.label for sn in edge.source_nodes.values()]
-            target_label = edge.target.label
+            source_labels = []
+            for sn in edge.source_nodes.values():
+                if hasattr(sn, 'label'):
+                    source_labels.append(sn.label)
+                else:
+                    source_labels.append(str(sn))
+            target_label = edge.target.label if hasattr(edge.target, 'label') else str(edge.target)
             for source_label in source_labels:
                 G.add_edge(source_label, target_label)
         
@@ -248,31 +283,31 @@ class VisualizationManager:
             node_vars: Dictionary of node StringVar objects
             toggle_switches: Dictionary of toggle switch widgets
         """
-        if node_label in node_vars and node_label in toggle_switches:
-            toggle_state = toggle_switches[node_label].get()
-            value = node_vars[node_label].get()
+        display_label = self.alias_map.get(node_label, node_label)
+        toggle = toggle_switches.get(display_label)
+        var = node_vars.get(display_label)
+        if toggle is not None and var is not None:
+            toggle_state = toggle.get()
+            value = var.get()
             
             if toggle_state == "source":
-                # Display known input values for source nodes
                 if value:
                     formatted_value = self._format_value_3sf(value)
-                    label_text = f"{node_label}\n{formatted_value}"
+                    label_text = f"{display_label}\n{formatted_value}"
                 else:
-                    label_text = f"{node_label}\n?"
+                    label_text = f"{display_label}\n?"
             elif toggle_state == "target":
-                # Display placeholder for target nodes (value calculated during simulation)
-                label_text = f"{node_label}\n?"
-            else:  # "none"
-                # Display placeholder for inactive nodes
-                label_text = f"{node_label}\n?"
+                label_text = f"{display_label}\n?"
+            else:
+                label_text = f"{display_label}\n?"
         else:
-            label_text = node_label
+            label_text = display_label
         
         text = self.ax.text(x, y, label_text, 
                           ha='center', va='center', 
                           fontsize=NODE_TEXT_FONT[1], fontweight=NODE_TEXT_FONT[2],
                           color=NODE_TEXT_COLOR, zorder=NODE_TEXT_ZORDER)
-        text._node_label = node_label  # Attach node identifier for text updates during animation
+        text._node_label = node_label  # Attach canonical node identifier for text updates during animation
     
     def _create_edges(self) -> None:
         """
@@ -283,8 +318,13 @@ class VisualizationManager:
         
         # Draw connection lines between related hypergraph nodes
         for edge in self.hypergraph.edges.values():
-            source_labels = [sn.label for sn in edge.source_nodes.values()]
-            target_label = edge.target.label
+            source_labels = []
+            for sn in edge.source_nodes.values():
+                if hasattr(sn, 'label'):
+                    source_labels.append(sn.label)
+                else:
+                    source_labels.append(str(sn))
+            target_label = edge.target.label if hasattr(edge.target, 'label') else str(edge.target)
             
             for source_label in source_labels:
                 if source_label in self.layout_positions and target_label in self.layout_positions:
@@ -304,22 +344,20 @@ class VisualizationManager:
         Args:
             toggle_switches: Dictionary of toggle switch widgets
         """
-        for node_label, toggle in toggle_switches.items():
-            if node_label in self.circles:
-                circle = self.circles[node_label]
+        for alias_label, toggle in toggle_switches.items():
+            canonical_label = self.inverse_alias_map.get(alias_label, alias_label)
+            if canonical_label in self.circles:
+                circle = self.circles[canonical_label]
                 toggle_state = toggle.get()
                 
-                # Determine color based on state
                 if toggle_state == "source":
-                    color = SUCCESS_COLOR  # Green for source
+                    color = SUCCESS_COLOR
                 elif toggle_state == "target":
-                    color = WARNING_COLOR  # Orange for target
+                    color = WARNING_COLOR
                 else:
-                    color = "#ababab"  # Gray for none
+                    color = "#ababab"
                 
-                # Only update if color has changed
-                if circle.get_facecolor() != color:
-                    circle.set_facecolor(color)
+                circle.set_facecolor(color)
     
     def update_node_text(self, node_label: str, node_vars: Dict[str, Any], 
                         toggle_switches: Dict[str, Any]) -> None:
@@ -331,34 +369,36 @@ class VisualizationManager:
             node_vars: Dictionary of node StringVar objects
             toggle_switches: Dictionary of toggle switch widgets
         """
-        if node_label not in self.layout_positions:
+        canonical_label = self.inverse_alias_map.get(node_label, node_label)
+        if canonical_label not in self.layout_positions:
             return
             
-        x, y = self.layout_positions[node_label]
+        x, y = self.layout_positions[canonical_label]
+        display_label = self.alias_map.get(canonical_label, canonical_label)
         
         # Find and update existing text for this node
         text_found = False
         for text_obj in self.ax.texts[:]:
-            if (hasattr(text_obj, '_node_label') and text_obj._node_label == node_label) or \
+            if (hasattr(text_obj, '_node_label') and text_obj._node_label == canonical_label) or \
                (abs(text_obj.get_position()[0] - x) < 0.01 and abs(text_obj.get_position()[1] - y) < 0.01):
                 
                 # Generate new text based on toggle status
-                if node_label in node_vars and node_label in toggle_switches:
-                    toggle_state = toggle_switches[node_label].get()
-                    value = node_vars[node_label].get()
+                if display_label in node_vars and display_label in toggle_switches:
+                    toggle_state = toggle_switches[display_label].get()
+                    value = node_vars[display_label].get()
                     
                     if toggle_state == "source":
                         if value:
                             formatted_value = self._format_value_3sf(value)
-                            label_text = f"{node_label}\n{formatted_value}"
+                            label_text = f"{display_label}\n{formatted_value}"
                         else:
-                            label_text = f"{node_label}\n?"
+                            label_text = f"{display_label}\n?"
                     elif toggle_state == "target":
-                        label_text = f"{node_label}\n?"
+                        label_text = f"{display_label}\n?"
                     else:  # "none"
-                        label_text = f"{node_label}\n?"
+                        label_text = f"{display_label}\n?"
                 else:
-                    label_text = node_label
+                    label_text = display_label
                 
                 # Update existing text object
                 text_obj.set_text(label_text)
@@ -367,7 +407,7 @@ class VisualizationManager:
         
         # If no existing text found, create new one
         if not text_found:
-            self._create_node_text(node_label, x, y, node_vars, toggle_switches)
+            self._create_node_text(canonical_label, x, y, node_vars, toggle_switches)
     
     def _format_value_3sf(self, value: Any) -> str:
         """

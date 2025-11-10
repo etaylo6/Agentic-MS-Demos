@@ -1014,6 +1014,9 @@ def animate_bipartite_frame(frame: int, tnodes: List[TNode], inputs: List[str],
         List of modified patches
     """
     mod_patches = []
+    alias_map = getattr(ps, 'alias_map', {}) or {}
+    def label_display(label: str) -> str:
+        return alias_map.get(label, label)
     
     # Phase 1: Highlight source nodes with their input values
     if frame < input_display_frames:
@@ -1022,7 +1025,7 @@ def animate_bipartite_frame(frame: int, tnodes: List[TNode], inputs: List[str],
         
         if input_index < len(inputs):
             input_node = inputs[input_index]
-            text.set_text(f'Setting source node: {input_node}')
+            text.set_text(f'Setting source node: {label_display(input_node)}')
             mod_patches.append(text)
             
             if sub_frame == 0 and input_node in shapes:
@@ -1039,7 +1042,7 @@ def animate_bipartite_frame(frame: int, tnodes: List[TNode], inputs: List[str],
         
         if tnode_index < len(path_tnodes):
             t = path_tnodes[tnode_index]
-            text.set_text(f'Calculating: {t.node_label}')
+            text.set_text(f'Calculating: {label_display(t.node_label)}')
             mod_patches.append(text)
             
             # Highlight current node: avoid reverting solved (green) nodes to orange
@@ -1081,7 +1084,7 @@ def animate_bipartite_frame(frame: int, tnodes: List[TNode], inputs: List[str],
     
     # Phase 3: Display final result
     elif frame < input_display_frames + pathfinding_frames + final_result_frames:
-        text.set_text(f'Final result: {output}')
+        text.set_text(f'Final result: {label_display(output)}')
         mod_patches.append(text)
         
         # Highlight final output node

@@ -144,8 +144,8 @@ class SimulationController:
             
             self.hypergraph.memory_mode = True
             # Try with target node as string label and inputs as string-keyed dict
-            target_label = str(target_node) if target_node else None
-            inputs_dict = {str(k): v for k, v in inputs.items()}
+            target_label = getattr(target_node, 'label', str(target_node)) if target_node else None
+            inputs_dict = {getattr(k, 'label', str(k)): v for k, v in inputs.items()}
             # print(f"Target label: {target_label}")  # Commented out to reduce debug spam
             # print(f"Inputs dict: {inputs_dict}")  # Commented out to reduce debug spam
             end_result = self.hypergraph.solve(target_label, inputs_dict, search_depth=1000)

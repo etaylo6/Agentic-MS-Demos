@@ -48,7 +48,7 @@ def _clone_hypergraph_without_edges(hypergraph: Hypergraph, excluded_ids: Set[An
     for edge_id, edge in hypergraph.edges.items():
         if edge_id in excluded_ids:
             continue
-        new_hg.add_edge(
+        new_edge = new_hg.add_edge(
             edge.source_nodes,
             edge.target,
             rel=getattr(edge, "rel", None),
@@ -60,6 +60,9 @@ def _clone_hypergraph_without_edges(hypergraph: Hypergraph, excluded_ids: Set[An
             disposable=list(getattr(edge, "disposable", []) or []),
             edge_props=list(getattr(edge, "edge_props", []) or []),
         )
+        for attr_name in ("semantic_group", "group"):
+            if hasattr(edge, attr_name):
+                setattr(new_edge, attr_name, getattr(edge, attr_name))
 
     log(f"Created hypergraph with {len(new_hg.edges)} edges (removed {len(excluded_ids)})")
     return new_hg

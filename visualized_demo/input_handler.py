@@ -26,7 +26,7 @@ Usage:
 """
 
 import tkinter as tk
-from typing import Dict, List, Optional, Tuple, Any, Callable
+from typing import Dict, List, Optional, Tuple, Any, Callable, Set
 from gui_constants import (
     CARD_BG_COLOR, TEXT_COLOR, DEFAULT_BG_COLOR, GRAY_COLOR,
     DEFAULT_BEAM_VALUES, DEFAULT_TOGGLE_STATES, MECHANICAL_PROPERTIES,
@@ -61,7 +61,7 @@ class InputHandler:
         hypergraph: Reference to the hypergraph model
     """
     
-    def __init__(self, parent: tk.Widget, gui_ref: Any, hypergraph: Any):
+    def __init__(self, parent: tk.Widget, gui_ref: Any, hypergraph: Any, *, node_aliases: Optional[Dict[str, Any]] = None):
         """
         Initialize the input handler.
         
@@ -73,6 +73,7 @@ class InputHandler:
         self.parent = parent
         self.gui_ref = gui_ref
         self.hypergraph = hypergraph
+        self.node_alias_map: Dict[str, Any] = node_aliases or {}
         
         # Input state management
         self.node_vars: Dict[str, tk.StringVar] = {}
@@ -109,14 +110,14 @@ class InputHandler:
         Returns:
             List[str]: Sorted list of node labels
         """
-        nodes = []
-        for node in self.hypergraph.nodes:
-            if hasattr(node, 'label'):
-                nodes.append(node.label)
-            else:
-                nodes.append(str(node))
-        
-        return sorted(nodes)
+        labels: Set[str] = set(self.node_alias_map.keys())
+        if not labels:
+            for node in self.hypergraph.nodes:
+                if hasattr(node, 'label'):
+                    labels.add(node.label)
+                else:
+                    labels.add(str(node))
+        return sorted(labels)
     
     def _create_mechanical_properties_section(self, nodes: List[str]) -> None:
         """
@@ -324,11 +325,13 @@ class InputHandler:
                         value = float(entry_value)
                     
                     # Find the corresponding Node object for this label
-                    node_obj = None
-                    for node in self.hypergraph.nodes:
-                        if str(node) == node_label:
-                            node_obj = node
-                            break
+                    node_obj = self.node_alias_map.get(node_label)
+                    if node_obj is None:
+                        for node in self.hypergraph.nodes:
+                            candidate = getattr(node, 'label', str(node))
+                            if candidate == node_label or str(node) == node_label:
+                                node_obj = node
+                                break
                     
                     if node_obj is not None:
                         inputs[node_obj] = value
@@ -340,11 +343,13 @@ class InputHandler:
                     pass
             elif toggle_state == "target":
                 # Find the target node
-                target_node = None
-                for node in self.hypergraph.nodes:
-                    if str(node) == node_label:
-                        target_node = node
-                        break
+                target_node = self.node_alias_map.get(node_label)
+                if target_node is None:
+                    for node in self.hypergraph.nodes:
+                        candidate = getattr(node, 'label', str(node))
+                        if candidate == node_label or str(node) == node_label:
+                            target_node = node
+                            break
                 
                 if target_node is None:
                     # Try to get the node directly
