@@ -1,7 +1,8 @@
-# Beam_CH_Demo
+This Github houses the demos and visualizations for the upcoming JCISE sumbission "Agentic Selection of Valid Multi-Fidelity Models"
 
-This demo uses capabilities that are established in ConstraintHG (https://github.com/jmorris335/ConstraintHg) for the upcoming paper Agentic Selection of Valid Multi-Fidelity Models.
+Figures that were generated for the paper are housed in .................. folder name
 
-subgraph_testing.py used to validate how many executable models are found in the graph.
+A demonstration of the pathfinding abilities of this methodology are visualized in the visualized_demos section. 
 
-visualized_agent.py shows how this methodology can be used to flexibly represent the system for all possible models.
+This demo uses capabilities that are established in ConstraintHG (https://github.com/jmorris335/ConstraintHg) with some algorthmic tweaks specifically to handle syntactic variants.
+
